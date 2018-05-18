@@ -1,15 +1,23 @@
+"""
+Takes in a single argument of a directory path of a folder with bedgraph files.
+Reads all files in the folder and writesto data_output.txt the preprocessing for all the files.
+Outputs a representation of a continuous 25000 base pair "chunk size" as a single line in the file.
+The line in the file is tab delimited, with the first value being "file name: chromosome name: start position on chromsome".
+The second value is either populated or sparse, depending on whether the sum of all read counts for that line exceeds SPARSE_LIMIT.
+The rest of the values represent the maximum read count within a 25 base pair "chunk size" region of the overall 25000 base pairs. 
+Therefore, there are 1000 values for each line of the output file. 
+"""
 import sys
 import os 
 import math
-
-#Directory path of folder with all files is first argument 
-#Output chunk as tab delimited row, first element of row is file name: chromosome name: start position of chunk on chromosome, second element of row is sparse or populated, depending if sum of row is greater than 75
-#If multiple values in one bucket, takes max
 
 BUCKET_SIZE = 25
 CHUNK_SIZE = 25000
 SPARSE_LIMIT = 75
 
+"""
+Reads in the names of the files in the directory indicated by path and performs processFile on each.
+"""
 def main():
 	path = sys.argv[1]
 	dirs = os.listdir(path)
@@ -18,6 +26,13 @@ def main():
 		processFile(file, output, path)
 	output.close()
 
+"""
+file: name of file being read in to process
+output: name of output file
+path: directory path of folder with all bedgraph files 
+
+Opens file and outputs processed values for continuous 25000 base pair lengths, by binning maximum signal values for 25 bp intervals.
+"""
 def processFile(file, output, path):
 	f = open(str(path) + "/" + str(file))
 	prev_chrom = ""
@@ -29,7 +44,10 @@ def processFile(file, output, path):
 		end = int(split_line[2])
 		value = float(split_line[3])
 		last_index = 0
-		if chrom == prev_chrom and len(chunk_array) >= CHUNK_SIZE/BUCKET_SIZE: #new chunk 
+		
+		#start a new chunk
+		if chrom == prev_chrom and len(chunk_array) >= CHUNK_SIZE/BUCKET_SIZE: 
+			#output old chunk
 			chunk_val = [float(val) for val in chunk_array]
 			flag = "populated"
 			if sum(chunk_val) < SPARSE_LIMIT:
@@ -38,10 +56,14 @@ def processFile(file, output, path):
 			output.write(describe + "\t")
 			output.write(flag + "\t")
 			output.write('\t'.join(chunk_array) + "\n")
+			
+			#re-initialize values for new chunk
 			start_chunk = start 
 			chunk_array = []
 			last_index = 0
-		if chrom != prev_chrom: #new chromosome 
+
+		#start a new chunk on a new chromosome 
+		if chrom != prev_chrom:
 			prev_chrom = chrom
 			start_chunk = start
 			last_index = 0
