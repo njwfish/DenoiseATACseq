@@ -2,7 +2,12 @@ import numpy as np
 
 
 class Morphisms(object):
-
+    """
+    This is a set of changes that can be made to weight matrices of layers that leave the new net as the same mapping as
+    the net before modification.
+    This methodology is based on theis paper: https://arxiv.org/pdf/1711.04528.pdf
+    Some implementation details from this repo: https://github.com/keras-team/keras/issues/3491
+    """
     def _conv_deeper(self, W):
         assert W.shape[0] % 2 == 1 and W.shape[1] % 2 == 1, 'Kernel size should be odd'
         W_deeper = np.zeros((W.shape[0], W.shape[1], W.shape[3], W.shape[3]))

@@ -4,6 +4,9 @@ import os
 import keras.callbacks as callbacks
 from keras.callbacks import Callback
 
+# Code from on Keras contrib here:
+# https://github.com/keras-team/keras-contrib/blob/master/keras_contrib/callbacks/snapshot.py
+
 class SnapshotModelCheckpoint(Callback):
     """Callback that saves the snapshot weights of the model.
     Saves the model weights on certain epochs (which can be considered the

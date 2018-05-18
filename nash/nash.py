@@ -19,7 +19,8 @@ class NASH(object):
 
     def search(self, baseline_net, save_nets=0):
         """
-        Greedy hill searc for nets based on validation accuracy
+        Greedy hill search for nets based on validation accuracy.
+        This is an implementatino of the technique validated here: https://arxiv.org/pdf/1711.04528.pdf
         :param baseline_net: the starting parent network
         :param save_nets: save intermediate nets or not
         :return:
