@@ -1,11 +1,12 @@
 from random import randint
 
 import keras
-from keras.layers import Conv2D, Dense, Reshape
-from net_morphisms import Morphisms
+from keras.layers import Conv2D, Dense, Flatten
+from keras.utils import multi_gpu_model
 
 from keras_utils import save_model
-from nash.snapshot import SnapshotCallbackBuilder
+from net_morphisms import Morphisms
+from snapshot import SnapshotCallbackBuilder
 
 
 class NASH(object):
@@ -26,31 +27,37 @@ class NASH(object):
         :return:
         """
         parent = baseline_net
-        parent.compile(loss="mse", optimizer="adam", metrics=["mse","mae"])
-        parent, loss = self.train_cosine_annealing(parent, epochs=self.epochs)
+        parent, h, loss = self.train_cosine_annealing(parent, epochs=self.epochs)
         for i in range(self.steps):
-            nets = [(loss, parent)]
+            nets = [(loss, parent, h)]
             modifiable_layers = []
             # Create list of layers that can be modified
             for j in range(len(parent.layers) - 1):  # Cannot modify last layer
                 if isinstance(parent.layers[j], (Conv2D, Dense)):
                     # NASH cannot modify 'bridge' layers where model transitions from Dense to Conv or vice versa
-                    if j != len(parent.layers) - 1 and isinstance(parent.layers[j + 1], Reshape):
+                    if j != len(parent.layers) - 1 and isinstance(parent.layers[j + 1], Flatten):
                         continue
                     modifiable_layers.append(j)
             possible_moves = self.gen_possible_moves(modifiable_layers)
             # create and train variations of parent according to self.children, do not exceed possible children (moves)
+            print('CHILDREN')
             for _ in range(min(self.children, len(possible_moves))):
                 child, possible_moves = self.gen_child(parent, possible_moves)
-                child, loss = self.train_cosine_annealing(child, epochs=self.epochs)
-                nets.append((loss, child))
+
+                child, h, loss = self.train_cosine_annealing(child, epochs=self.epochs)
+                child.summary()
+                print(loss)
+                nets.append((loss, child, h))
             # select net with lowest validation loss to be new parent
-            loss, parent = min(nets, key=lambda x: x[0])
+            loss, parent, h = min(nets, key=lambda x: x[0])
+            print('BEST')
+            parent.summary()
+            print(loss)
             if save_nets == 1:
-                save_model("model_" + str(i) + str(loss), parent, None)
+                save_model("model_" + str(i) + '_' + str(loss), parent, h)
         return parent
 
-    def gen_possible_moves(self, l, widen_range=(3,6), kernel_range=(2,5), skip_types=2):
+    def gen_possible_moves(self, l, widen_range=[3, 5, 7], kernel_range=[2,4,6], skip_types=2):
         """
         Generate all possible
         :param l: the number of layers
@@ -59,8 +66,10 @@ class NASH(object):
             moves[1]:
 
         """
-        widen = [(0, i, j) for i in l for j in range(widen_range[0], widen_range[1])]
-        deepen = [(1, i, j) for i in l for j in range(kernel_range[0], kernel_range[0])]
+        widen = [(0, i, j) for i in l[:-1] for j in widen_range]
+
+        deepen = [(1, i, j) for i in l for j in kernel_range]
+
         # Skip connections not yet implemented
         #skip = [(2, j, i, k) for i in range(1, l - 2) for j in range(i + 2, l) for k in range(skip_types)]
         return widen + deepen #+ skip
@@ -77,14 +86,14 @@ class NASH(object):
         W2, b2 = parent.layers[layer + 1].get_weights()
         if W1.ndim == 2:
             student_w1, student_b1, student_w2 = self.morph.widen(W1, b1, W2, W1.shape[1] + new_width)
-            layer = Dense(student_w1.shape[1], weights=[student_w1, student_b1], name="dense_one")
-            layer_n = Dense(student_w2.shape[1], weights=[student_w2, b2], name="dense_one")
+            layer = Dense(student_w1.shape[1], weights=[student_w1, student_b1])
+            layer_n = Dense(student_w2.shape[1], weights=[student_w2, b2])
         else:
             student_w1, student_b1, student_w2 = self.morph.widen(W1, b1, W2, W1.shape[3] + new_width)
             layer = Conv2D(student_w1.shape[3], (student_w1.shape[0], student_w1.shape[1]),
                            padding="same", weights=[student_w1, b1])
             layer_n = Conv2D(student_w2.shape[3], (student_w2.shape[0], student_w2.shape[1]),
-                           padding="same", weights=[student_w2, b2], name="conv2d_one")
+                             padding="same", weights=[student_w2, b2])
         # Ensure no name conflicts for keras; in future this will be less bad
         layer.name = 'added' + str(abs(hash(str(layer))))
         layer_n.name = 'added' + str(abs(hash(str(layer_n))))
@@ -99,13 +108,16 @@ class NASH(object):
         """
         move_type, layer, new_width = move
         W = parent.layers[layer].get_weights()[0]
+        print(W.shape)
         # make this take kernel size into account
         W_deeper, b_deeper = self.morph.deepen(W)
+        print(W_deeper.shape)
         if W_deeper.ndim == 2:
             layer = Dense(W_deeper.shape[1], weights=[W_deeper, b_deeper])
         else:
             layer = Conv2D(W_deeper.shape[3], (W_deeper.shape[0], W_deeper.shape[1]),
-                                        weights=[W_deeper, b_deeper], padding="same")
+                           weights=[W_deeper, b_deeper], padding="same")
+        print(layer)
         return layer
 
     # Currently architecture search does not use skip connections, this will be implemented later
@@ -140,46 +152,59 @@ class NASH(object):
             out.append(l_out)
             inp.append(l_inp)
         W_next = None
-
+        added = 1
         # Rebuild parent net, layer by layer, substituting in for variations according to move, preserving weights
+        print(move)
         for i in range(1, len(parent.layers)):
-            l = parent.layers[i]
-            ori_in = inp[i]
-            ori_out = out[i]
-            if isinstance(ori_in, list):
-                new_in = [ori_to_new[str(i)] for i in ori_in]
-            else:
+            for jdx in range(added):
+                l = parent.layers[i]
+                ori_in = inp[i]
+                ori_out = out[i]
+                if added > 1:
+                    ori_to_new.update({str(ori_out): Z})
+                    ori_to_new.update({str(Z): Z})
+                added = 1
+                if isinstance(ori_in, list):
+                    new_in = [ori_to_new[str(i)] for i in ori_in]
+                else:
+                    # It is unclear why this is necessary, but it is. Removing this try except causes errors. This is odd.
+                    try:
+                        new_in = ori_to_new[str(ori_in)]
+                    except:
+                        new_in = ori_to_new[str(ori_in)]
+
+
+                if W_next is not None:
+                    l = W_next
+                    W_next = None
+
+                if move[1] == i:
+                    if move[0] == 0:
+                        l, W_next = self.widened_layer(move, parent)
+                    if move[0] == 1:
+                        Z = l(new_in)
+                        ori_to_new.update({str(ori_out): Z})
+                        ori_to_new.update({str(Z): Z})
+                        l = self.deepened_layer(move, parent)
+                        new_in = Z
+                        added += 1
+                    if move[0] == 2:
+                        continue
+
                 # It is unclear why this is necessary, but it is. Removing this try except causes errors. This is odd.
+                print(ori_in)
+                print(new_in)
+                print(Z)
                 try:
-                    new_in = ori_to_new[str(ori_in)]
+                    Z = l(new_in)
                 except:
-                    new_in = ori_to_new[str(ori_in)]
+                    Z = l(new_in)
 
-            if W_next is not None:
-                l = W_next
-                W_next = None
-
-            if move[1] == i:
-                if move[0] == 0:
-                    l, W_next = self.widened_layer(move, parent)
-                if move[0] == 1:
-                    l_added = self.deepened_layer(move, parent)
-                    Z = l_added(new_in)
-                    new_in = Z
-                if move[0] == 2:
-                    continue
-
-            # It is unclear why this is necessary, but it is. Removing this try except causes errors. This is odd.
-            try:
-                Z = l(new_in)
-            except:
-                Z = l(new_in)
-
-            ori_to_new.update({str(ori_out): Z})
-            ori_to_new.update({str(Z): Z})
+                ori_to_new.update({str(ori_out): Z})
+                ori_to_new.update({str(Z): Z})
         # Compile and train child model
         child = keras.models.Model(inputs=input_tensor, outputs=Z)
-        child.compile(loss="mse", optimizer="adam", metrics=["mse","mae"])
+        child.summary()
         return child, possible_moves
 
     def train_cosine_annealing(self, model, epochs=20, m=5, alpha_zero=0.1):
@@ -193,6 +218,8 @@ class NASH(object):
         """
         # Use snapshots to save best models at intermediate milestones
         snapshot = SnapshotCallbackBuilder(epochs, m, alpha_zero)
-        h = model.fit(self.X_train, self.y_train, validation_split=0.05,
-                      callbacks=snapshot.get_callbacks(model_prefix="tmp"))
-        return model, h.history['val_loss'][-1]
+        multi_model = multi_gpu_model(model)
+        multi_model.compile(loss="mse", optimizer="adam")
+        h = multi_model.fit(self.X_train, self.y_train, validation_split=0.05,
+                            epochs=epochs, batch_size=64, verbose=2)#callbacks=snapshot.get_callbacks(model_prefix="tmp"))
+        return model, h, h.history['val_loss'][-1]
