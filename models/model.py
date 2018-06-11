@@ -14,6 +14,9 @@ import pickle
 
 
 def gen_rand_architecture():
+    """
+    Create random model architecture
+    """
     conv_layers = randint(1, 4)
     filters_conv_layer = np.random.randint(5, 11, conv_layers)
     filter_size_conv_layer = np.random.randint(4, 11, conv_layers)
@@ -34,6 +37,9 @@ def r2(y_true, y_pred):
 
 
 def compile_model(conv_layers, filters_conv_layer, filter_size_conv_layer, dense_layers, units_dense_layer):
+    """
+    Build random sequential model from blueprint
+    """
     model = Sequential()
     model.add(InputLayer((150, 4, 1)))
     for i in range(conv_layers):
@@ -69,6 +75,9 @@ def load_model(model_id):
 
 
 def rand_architecture_search(X_train, X_test, y_train, y_test):
+    """
+    Build and train random architectures
+    """
     while True:
         trained_models = [f.split(".")[0] for f in os.listdir('models/')]
         model_id, architecture = gen_rand_architecture()
@@ -76,7 +85,7 @@ def rand_architecture_search(X_train, X_test, y_train, y_test):
             model_id, architecture = gen_rand_architecture()
 
         model = compile_model(*architecture)
-        history = model.fit(X_train, y_train, validation_split=0.05, epochs=1000, batch_size=32, verbose=0)
+        history = model.fit(X_train, y_train, validation_split=0.05, epochs=100, batch_size=32, verbose=0)
         save_model(model_id, model, history)
 
         score = model.evaluate(X_test, y_test, verbose=0)
@@ -96,19 +105,10 @@ def train_in_depth(model_id):
     print("%s: %.2f" % (model.metrics_names[1], score[1]))
 
 def set_lambda(model_id, model, l):
+    """
+    Add regularization term to model
+    """
     for i in range(l):
         model.layers[i+1].kernel_regularizer = regularizers.l2(0.00001)
     with open('models/' + model_id + ".yaml", "w") as yaml_file:
         yaml_file.write(model_yaml)
-
-seed = 7
-np.random.seed(seed)
-# load dataset
-X, Y = load_processed_data()
-
-X_train, X_test, y_train, y_test = train_test_split(X, Y, test_size=0.1, random_state=42)
-
-#rand_architecture_search(X_train, X_test, y_train, y_test)
-#model, h = load_model("38910844265")
-
-#train_in_depth("38910844265")
